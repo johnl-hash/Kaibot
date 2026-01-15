@@ -4,9 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-# Interfaz
 st.set_page_config(page_title="Asistente Kaiowa", layout="centered")
 
+# Estilos visuales
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
@@ -20,7 +20,7 @@ st.markdown("""
 BASE_URL = "https://sites.google.com/kaiowa.co/informate-kaiowa/inicio"
 
 @st.cache_resource
-def get_info():
+def get_kb():
     urls = {BASE_URL}
     try:
         r = requests.get(BASE_URL, timeout=10)
@@ -31,9 +31,7 @@ def get_info():
                 if "sites.google.com" in f and "/informate-kaiowa/" in f: urls.add(f)
     except: pass
     t = ""
-    u_list = list(urls)
-    bar = st.progress(0, text="Cargando datos...")
-    for i, l in enumerate(u_list):
+    for l in list(urls):
         try:
             res = requests.get(l, timeout=10)
             if res.status_code == 200:
@@ -43,19 +41,17 @@ def get_info():
                     c = tag.get_text().strip()
                     if len(c) > 20: t += c + "\n"
         except: pass
-        bar.progress((i + 1) / len(u_list))
-    bar.empty()
     return t
 
 st.title("Asistente Kaiowa 💬")
 
-# Llave desde Secrets
+# Verificar Secret
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Error: Falta la llave en Secrets.")
+    st.error("Error: Configura la API Key en Secrets.")
     st.stop()
 
-if "kb_text" not in st.session_state:
-    st.session_state.kb_text = get_info()
+if "kb" not in st.session_state:
+    st.session_state.kb = get_kb()
 
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Hola. ¿En qué proceso tienes duda?"}]
@@ -68,17 +64,21 @@ if prompt := st.chat_input("Escribe tu duda aquí..."):
     with st.chat_message("user"): st.markdown(prompt)
 
     try:
-        # CONEXIÓN BÁSICA SIN ARGUMENTOS EXTRA
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        instrucciones = f"Eres el asistente de Kaiowa. Responde amable, tuteando y usa SOLO esta info: {st.session_state.kb_text}"
-        
+        # PROBAR MODELO FLASH (SI FALLA, PROBAR MODELO PRO)
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            contexto = f"Usa solo esta info: {st.session_state.kb}. Tutea siempre. Pregunta: {prompt}"
+            response = model.generate_content(contexto)
+        except:
+            model = genai.GenerativeModel('gemini-pro')
+            contexto = f"Usa solo esta info: {st.session_state.kb}. Tutea siempre. Pregunta: {prompt}"
+            response = model.generate_content(contexto)
+            
         with st.chat_message("assistant"):
-            # Usamos el método más estándar posible
-            response = model.generate_content(instrucciones + "\n\nPregunta: " + prompt)
             st.markdown(response.text)
             st.session_state.messages.append({"role": "assistant", "content": response.text})
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error de Google: {e}")
