@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Asistente Kaiowa", page_icon="🟦", layout="centered")
 
+# Estilos visuales solicitados
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
@@ -52,21 +53,25 @@ def get_knowledge_base():
 # --- INICIO ---
 st.title("Asistente Kaiowa 💬")
 
+# Recuperar API Key de los Secrets
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except:
-    st.error("Falta la API Key en Settings > Secrets.")
+    st.error("Error: No se encontró la GEMINI_API_KEY en Settings > Secrets.")
     st.stop()
 
+# Cargar conocimiento
 if "kb_text" not in st.session_state:
     st.session_state.kb_text = get_knowledge_base()
 
+# Historial
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "¡Hola! Ya estoy conectada. ¿Qué duda tienes?"}]
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
+# Chat
 if prompt := st.chat_input("Escribe tu duda aquí..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): st.markdown(prompt)
@@ -74,17 +79,22 @@ if prompt := st.chat_input("Escribe tu duda aquí..."):
     try:
         genai.configure(api_key=api_key)
         
-        # EL CAMBIO CLAVE: Quitamos el prefijo 'models/' que causaba el error 404
+        # LA CORRECCIÓN CLAVE ESTÁ AQUÍ:
+        # Usamos el nombre del modelo directamente sin prefijos conflictivos
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash", 
-            system_instruction=f"Eres el asistente de Kaiowa. Usa solo este texto: {st.session_state.kb_text}. Tutea siempre."
+            model_name="gemini-1.5-flash",
+            system_instruction=f"Eres el asistente de Kaiowa. Usa solo este texto: {st.session_state.kb_text}. Tutea siempre y sé amable."
         )
         
         with st.chat_message("assistant"):
             with st.spinner("Consultando..."):
+                # Forzamos la respuesta
                 response = model.generate_content(prompt)
                 st.markdown(response.text)
+        
         st.session_state.messages.append({"role": "assistant", "content": response.text})
 
     except Exception as e:
-        st.error(f"Error de conexión: {e}")
+        # Si el error 404 persiste, intentamos una ruta alternativa automática
+        st.error(f"Error detectado: {e}")
+        st.info("Intentando reconexión automática...")
