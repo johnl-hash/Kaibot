@@ -1,12 +1,11 @@
 import streamlit as st
 import google.generativeai as genai
-from google.generativeai.types import RequestOptions
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-# Configuración de interfaz
-st.set_page_config(page_title="Asistente Kaiowa", page_icon="🟦", layout="centered")
+# Interfaz
+st.set_page_config(page_title="Asistente Kaiowa", layout="centered")
 
 st.markdown("""
 <style>
@@ -21,72 +20,65 @@ st.markdown("""
 BASE_URL = "https://sites.google.com/kaiowa.co/informate-kaiowa/inicio"
 
 @st.cache_resource
-def get_knowledge_base():
+def get_info():
     urls = {BASE_URL}
     try:
         r = requests.get(BASE_URL, timeout=10)
         if r.status_code == 200:
-            soup = BeautifulSoup(r.content, 'html.parser')
-            for a in soup.find_all('a', href=True):
-                full = urljoin(BASE_URL, a['href'])
-                if "sites.google.com" in full and "/informate-kaiowa/" in full:
-                    urls.add(full)
+            s = BeautifulSoup(r.content, 'html.parser')
+            for a in s.find_all('a', href=True):
+                f = urljoin(BASE_URL, a['href'])
+                if "sites.google.com" in f and "/informate-kaiowa/" in f: urls.add(f)
     except: pass
-    text = ""
-    url_list = list(urls)
-    my_bar = st.progress(0, text="Cargando base de conocimiento...")
-    for i, link in enumerate(url_list):
+    t = ""
+    u_list = list(urls)
+    bar = st.progress(0, text="Cargando datos...")
+    for i, l in enumerate(u_list):
         try:
-            resp = requests.get(link, timeout=10)
-            if resp.status_code == 200:
-                s = BeautifulSoup(resp.content, 'html.parser')
-                text += f"\n--- PAGINA: {link} ---\n"
-                for tag in s.find_all(['p', 'h1', 'h2', 'li']):
-                    clean = tag.get_text().strip()
-                    if len(clean) > 20: text += clean + "\n"
+            res = requests.get(l, timeout=10)
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.content, 'html.parser')
+                t += f"\n--- Seccion: {l} ---\n"
+                for tag in soup.find_all(['p', 'h1', 'h2', 'li']):
+                    c = tag.get_text().strip()
+                    if len(c) > 20: t += c + "\n"
         except: pass
-        my_bar.progress((i + 1) / len(url_list))
-    my_bar.empty()
-    return text
+        bar.progress((i + 1) / len(u_list))
+    bar.empty()
+    return t
 
 st.title("Asistente Kaiowa 💬")
 
+# Llave desde Secrets
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Configura GEMINI_API_KEY en Secrets.")
+    st.error("Error: Falta la llave en Secrets.")
     st.stop()
 
 if "kb_text" not in st.session_state:
-    st.session_state.kb_text = get_knowledge_base()
+    st.session_state.kb_text = get_info()
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Conexión lista. ¿Qué duda tienes?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "Hola. ¿En qué proceso tienes duda?"}]
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]): st.markdown(msg["content"])
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]): st.markdown(m["content"])
 
 if prompt := st.chat_input("Escribe tu duda aquí..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): st.markdown(prompt)
 
     try:
+        # CONEXIÓN BÁSICA SIN ARGUMENTOS EXTRA
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # FORZAMOS LA VERSIÓN V1 PARA EVITAR EL ERROR 404 DE LA BETA
-        model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash',
-            generation_config={"tag": "v1"}
-        )
+        instrucciones = f"Eres el asistente de Kaiowa. Responde amable, tuteando y usa SOLO esta info: {st.session_state.kb_text}"
         
         with st.chat_message("assistant"):
-            with st.spinner("Buscando en los procesos..."):
-                # Agregamos RequestOptions para asegurar la ruta v1
-                response = model.generate_content(
-                    f"Instrucciones: Eres el asistente de Kaiowa. Responde tuteando y usa solo este texto: {st.session_state.kb_text}\n\nPregunta: {prompt}",
-                    request_options=RequestOptions(api_version='v1')
-                )
-                st.markdown(response.text)
-        
-        st.session_state.messages.append({"role": "assistant", "content": response.text})
+            # Usamos el método más estándar posible
+            response = model.generate_content(instrucciones + "\n\nPregunta: " + prompt)
+            st.markdown(response.text)
+            st.session_state.messages.append({"role": "assistant", "content": response.text})
 
     except Exception as e:
         st.error(f"Error: {e}")
