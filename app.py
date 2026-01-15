@@ -4,10 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-# --- CONFIGURACIÓN ---
+# Configuración de interfaz
 st.set_page_config(page_title="Asistente Kaiowa", page_icon="🟦", layout="centered")
 
-# Estilos visuales solicitados
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
@@ -32,10 +31,9 @@ def get_knowledge_base():
                 if "sites.google.com" in full and "/informate-kaiowa/" in full:
                     urls.add(full)
     except: pass
-
     text = ""
     url_list = list(urls)
-    my_bar = st.progress(0, text="Cargando manuales...")
+    my_bar = st.progress(0, text="Cargando información del sitio...")
     for i, link in enumerate(url_list):
         try:
             resp = requests.get(link, timeout=10)
@@ -50,28 +48,24 @@ def get_knowledge_base():
     my_bar.empty()
     return text
 
-# --- INICIO ---
 st.title("Asistente Kaiowa 💬")
 
-# Recuperar API Key de los Secrets
-try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-except:
-    st.error("Error: No se encontró la GEMINI_API_KEY en Settings > Secrets.")
+# Carga de llave desde Secrets
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("Error: Configura GEMINI_API_KEY en los Secrets de Streamlit.")
     st.stop()
 
-# Cargar conocimiento
+api_key = st.secrets["GEMINI_API_KEY"]
+
 if "kb_text" not in st.session_state:
     st.session_state.kb_text = get_knowledge_base()
 
-# Historial
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "¡Hola! Ya estoy conectada. ¿Qué duda tienes?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "Conexión establecida. ¿En qué proceso tienes duda?"}]
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# Chat
 if prompt := st.chat_input("Escribe tu duda aquí..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): st.markdown(prompt)
@@ -79,22 +73,22 @@ if prompt := st.chat_input("Escribe tu duda aquí..."):
     try:
         genai.configure(api_key=api_key)
         
-        # LA CORRECCIÓN CLAVE ESTÁ AQUÍ:
-        # Usamos el nombre del modelo directamente sin prefijos conflictivos
+        # Ajuste técnico para evitar el error 404
+        # Se define el modelo sin el prefijo 'models/'
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=f"Eres el asistente de Kaiowa. Usa solo este texto: {st.session_state.kb_text}. Tutea siempre y sé amable."
+            model_name="gemini-1.5-flash-latest"
         )
         
+        chat = model.start_chat(history=[])
+        
+        instrucciones = f"Eres el asistente de Kaiowa. Responde de forma amable y tuteando. Usa SOLAMENTE esta información: {st.session_state.kb_text}"
+        
         with st.chat_message("assistant"):
-            with st.spinner("Consultando..."):
-                # Forzamos la respuesta
-                response = model.generate_content(prompt)
+            with st.spinner("Consultando manuales..."):
+                response = chat.send_message(f"{instrucciones}\n\nPregunta del usuario: {prompt}")
                 st.markdown(response.text)
         
         st.session_state.messages.append({"role": "assistant", "content": response.text})
 
     except Exception as e:
-        # Si el error 404 persiste, intentamos una ruta alternativa automática
-        st.error(f"Error detectado: {e}")
-        st.info("Intentando reconexión automática...")
+        st.error(f"Error técnico: {e}")
