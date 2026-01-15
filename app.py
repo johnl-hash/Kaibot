@@ -2,178 +2,172 @@ import streamlit as st
 import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
-import time
+from urllib.parse import urljoin, urlparse
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Asistente Kaiowa - Administrativa",
+    page_title="Asistente Kaiowa",
     page_icon="🟦",
     layout="centered"
 )
 
-# --- LISTA DE URLs A CONSULTAR (CEREBRO DEL BOT) ---
-# Agrega aquí todas las subpáginas que quieras que el bot lea.
-URLS = [
-    "https://sites.google.com/kaiowa.co/informate-kaiowa/inicio",
-    # "https://sites.google.com/kaiowa.co/informate-kaiowa/otra-pagina", 
-]
+# --- URL PRINCIPAL (RAÍZ) ---
+# Solo necesitas poner la página de inicio. El bot buscará el resto.
+BASE_URL = "https://sites.google.com/kaiowa.co/informate-kaiowa/inicio"
 
-# --- ESTILOS CSS (DISEÑO KAIOWA) ---
+# --- ESTILOS CSS (TU DISEÑO EXACTO) ---
 st.markdown("""
 <style>
-    /* Ocultar menú y footer de Streamlit */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
-    /* Fondo General (Blanco por defecto) */
-    
-    /* Globo del USUARIO (Azul #3f5fdf, Texto Blanco) */
+    /* Globo del USUARIO (Azul #3f5fdf) */
     .st-emotion-cache-16idsys.e1nzilvr5 {
         background-color: #3f5fdf !important;
         color: white !important;
     }
-    /* Forzar color de texto dentro del globo usuario */
-    .st-emotion-cache-16idsys.e1nzilvr5 p, 
-    .st-emotion-cache-16idsys.e1nzilvr5 div {
-        color: white !important;
-    }
+    .st-emotion-cache-16idsys.e1nzilvr5 p { color: white !important; }
 
-    /* Globo del BOT (Gris Claro, Texto Negro) */
+    /* Globo del BOT (Gris Claro) */
     .st-emotion-cache-10trblm.e1nzilvr1 {
         background-color: #f0f2f6 !important;
         color: black !important;
         border: 1px solid #e0e0e0;
     }
     
-    /* Estilo del Título */
-    h1 {
-        color: #3f5fdf;
-        font-family: sans-serif;
-        font-weight: 700;
-    }
-    
-    /* Estilo del subtítulo */
-    .caption {
-        font-size: 14px;
-        color: #666;
-    }
+    h1 { color: #3f5fdf; font-family: sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNCIÓN: LEER EL SITIO WEB ---
-@st.cache_data(ttl=3600) # Se actualiza cada hora automáticamente
-def get_knowledge_base(urls):
+# --- FUNCIÓN 1: RASTREADOR (DESCUBRE PÁGINAS) ---
+def find_subpages(base_url):
+    """Entra al inicio y busca enlaces a otras secciones del mismo sitio."""
+    found_urls = {base_url} # Usamos un set para evitar duplicados
+    try:
+        response = requests.get(base_url)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Busca todos los links 'a'
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                full_url = urljoin(base_url, href)
+                
+                # Regla: Solo guardar links que sean del mismo dominio (Google Sites)
+                # y que pertenezcan a tu sitio específico
+                if "sites.google.com" in full_url and "/informate-kaiowa/" in full_url:
+                    found_urls.add(full_url)
+    except Exception as e:
+        pass # Si falla el rastreo, al menos devuelve la home
+    
+    return list(found_urls)
+
+# --- FUNCIÓN 2: LECTOR DE CONTENIDO ---
+@st.cache_data(ttl=3600, show_spinner=False) # Se guarda en caché 1 hora
+def get_knowledge_base(start_url):
+    
+    # 1. Descubrir páginas
+    all_urls = find_subpages(start_url)
+    st.toast(f"🔎 He encontrado {len(all_urls)} páginas en tu sitio web.", icon="info")
+    
     combined_text = ""
-    total_urls = len(urls)
     
-    # Barra de progreso simple si son muchas urls
-    if total_urls > 1:
-        progress_bar = st.progress(0)
+    # 2. Barra de progreso visual
+    progress_text = "Leyendo manuales actualizados..."
+    my_bar = st.progress(0, text=progress_text)
     
-    for i, url in enumerate(urls):
+    # 3. Leer cada página
+    for idx, url in enumerate(all_urls):
         try:
             response = requests.get(url)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # Extraer texto limpio de parrafos y titulos
-                page_text = f"\n--- INFORMACIÓN DE LA URL: {url} ---\n"
-                tags = soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'li'])
+                # Título de la sección (para contexto del bot)
+                page_text = f"\n--- FUENTE: {url} ---\n"
                 
+                # Extraer texto útil
+                tags = soup.find_all(['p', 'h1', 'h2', 'h3', 'li', 'span'])
                 for tag in tags:
                     text = tag.get_text().strip()
-                    if len(text) > 20: # Filtrar textos muy cortos (menús, etc)
+                    if len(text) > 30: # Evitar textos basura muy cortos
                         page_text += text + "\n"
                 
                 combined_text += page_text
-            else:
-                combined_text += f"\n[Error leyendo {url}: Status {response.status_code}]\n"
-        except Exception as e:
-            combined_text += f"\n[Error conexión {url}: {e}]\n"
+        except:
+            continue
         
-        if total_urls > 1:
-            progress_bar.progress((i + 1) / total_urls)
+        # Actualizar barra
+        my_bar.progress((idx + 1) / len(all_urls), text=progress_text)
             
-    if total_urls > 1:
-        progress_bar.empty()
-        
+    my_bar.empty()
     return combined_text
 
-# --- INTERFAZ PRINCIPAL ---
+# --- INTERFAZ ---
 
-# Sidebar Limpio
 with st.sidebar:
-    st.image("https://www.gstatic.com/images/branding/product/1x/keep_2020q4_48dp.png", width=40) # Icono genérico
-    st.header("Configuración")
-    api_key = st.text_input("Gemini API Key", type="password", help="Ingresa tu clave de Google AI Studio")
+    st.image("https://www.gstatic.com/images/branding/product/1x/keep_2020q4_48dp.png", width=40)
+    api_key = st.text_input("Gemini API Key", type="password")
+    
     st.markdown("---")
-    st.info("🔹 Bot exclusivo: Cartera Administrativa")
-    st.caption("v1.0 - Kaiowa")
+    st.write("🔄 **Actualización**")
+    if st.button("Buscar nuevas páginas"):
+        st.cache_data.clear() # Borra la memoria para volver a escanear
+        st.rerun()
+    st.caption("Si agregas info al sitio, presiona el botón de arriba.")
 
-# Título
 st.title("Asistente Kaiowa 💬")
-st.markdown("<p class='caption'>Hola, soy tu herramienta de consulta rápida para procesos de cobranza administrativa (1-90 días).</p>", unsafe_allow_html=True)
+st.markdown("Tu herramienta de consulta para cobranza administrativa.")
 
-# Cargar Base de Conocimiento (Solo si hay API Key para no gastar recursos)
-if api_key:
-    if "kb_text" not in st.session_state:
-        with st.spinner("Leyendo manuales operativos..."):
-            st.session_state.kb_text = get_knowledge_base(URLS)
-            if len(st.session_state.kb_text) < 100:
-                st.error("⚠️ Parece que no pude leer el sitio web. Verifica que sea PÚBLICO.")
-else:
-    st.warning("👈 Por favor ingresa tu API Key en el menú lateral para comenzar.")
+# Validar API Key
+if not api_key:
+    st.warning("👈 Ingresa la API Key para comenzar.")
     st.stop()
 
-# --- GESTIÓN DEL CHAT ---
+# Cargar Base de Conocimientos (Automática)
+if "kb_text" not in st.session_state:
+    with st.spinner("Conectando con el sitio web..."):
+        st.session_state.kb_text = get_knowledge_base(BASE_URL)
+
+# --- CHATBOT ---
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "¡Hola! 👋 Soy tu compañera virtual. ¿Tienes dudas sobre algún proceso de cobranza o manejo del sistema? Pregúntame con confianza."}
+        {"role": "assistant", "content": "¡Hola! 👋 He leído toda la información publicada en el sitio. ¿En qué puedo ayudarte hoy?"}
     ]
 
-# Mostrar historial
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Input del usuario
-if prompt := st.chat_input("Escribe tu pregunta aquí..."):
-    # 1. Guardar y mostrar mensaje usuario
+if prompt := st.chat_input("Escribe tu duda aquí..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. Llamada a Gemini
     try:
         genai.configure(api_key=api_key)
         
-        # EL PROMPT DEL SISTEMA (La personalidad)
         system_instruction = f"""
-        Eres una asistente experta en cobranza administrativa de la empresa Kaiowa.
-        Tu misión es ayudar a las asesoras a resolver dudas operativas rápidamente.
+        Eres un asistente experto de Kaiowa (Cobranza Administrativa).
         
-        BASE DE CONOCIMIENTO (LEÍDA DEL SITIO WEB):
+        INFORMACIÓN ACTUALIZADA DEL SITIO WEB:
         {st.session_state.kb_text}
         
-        REGLAS DE COMPORTAMIENTO:
-        1. Tono: Amable, cercano, usa "tú" (tutea), usa emojis ocasionalmente. Profesional pero no rígido.
-        2. Lenguaje: Sencillo, claro, evita tecnicismos complejos. Explica paso a paso.
-        3. Fuente: Responde ÚNICAMENTE basándote en la "Base de Conocimiento" de arriba.
-        4. Límites: Si la información no está en el texto provisto, di amablemente: "Lo siento, esa info no la tengo en mis manuales actuales. Por favor consúltalo con tu líder." NO busques en internet ni inventes.
-        5. Contexto: Recuerda que cobramos cartera de 1 a 90 días.
+        INSTRUCCIONES:
+        1. Responde SOLO con la información provista arriba.
+        2. Tutea, sé amable, usa emojis.
+        3. Si la info no está en el texto, di: "No encuentro esa información publicada en el sitio web."
+        4. Explica simple, sin palabras técnicas.
         """
         
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=system_instruction
-        )
+        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
         
         with st.chat_message("assistant"):
-            with st.spinner("Consultando..."):
+            with st.spinner("Analizando..."):
                 response = model.generate_content(prompt)
                 st.markdown(response.text)
         
         st.session_state.messages.append({"role": "assistant", "content": response.text})
 
     except Exception as e:
-        st.error(f"Ocurrió un error: {str(e)}")
+        st.error(f"Error: {e}")
