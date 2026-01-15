@@ -1,5 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
+from google.generativeai.types import RequestOptions
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -33,7 +34,7 @@ def get_knowledge_base():
     except: pass
     text = ""
     url_list = list(urls)
-    my_bar = st.progress(0, text="Cargando información del sitio...")
+    my_bar = st.progress(0, text="Cargando base de conocimiento...")
     for i, link in enumerate(url_list):
         try:
             resp = requests.get(link, timeout=10)
@@ -50,18 +51,15 @@ def get_knowledge_base():
 
 st.title("Asistente Kaiowa 💬")
 
-# Carga de llave desde Secrets
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Error: Configura GEMINI_API_KEY en los Secrets de Streamlit.")
+    st.error("Configura GEMINI_API_KEY en Secrets.")
     st.stop()
-
-api_key = st.secrets["GEMINI_API_KEY"]
 
 if "kb_text" not in st.session_state:
     st.session_state.kb_text = get_knowledge_base()
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Conexión establecida. ¿En qué proceso tienes duda?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "Conexión lista. ¿Qué duda tienes?"}]
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -71,24 +69,24 @@ if prompt := st.chat_input("Escribe tu duda aquí..."):
     with st.chat_message("user"): st.markdown(prompt)
 
     try:
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         
-        # Ajuste técnico para evitar el error 404
-        # Se define el modelo sin el prefijo 'models/'
+        # FORZAMOS LA VERSIÓN V1 PARA EVITAR EL ERROR 404 DE LA BETA
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash-latest"
+            model_name='gemini-1.5-flash',
+            generation_config={"tag": "v1"}
         )
         
-        chat = model.start_chat(history=[])
-        
-        instrucciones = f"Eres el asistente de Kaiowa. Responde de forma amable y tuteando. Usa SOLAMENTE esta información: {st.session_state.kb_text}"
-        
         with st.chat_message("assistant"):
-            with st.spinner("Consultando manuales..."):
-                response = chat.send_message(f"{instrucciones}\n\nPregunta del usuario: {prompt}")
+            with st.spinner("Buscando en los procesos..."):
+                # Agregamos RequestOptions para asegurar la ruta v1
+                response = model.generate_content(
+                    f"Instrucciones: Eres el asistente de Kaiowa. Responde tuteando y usa solo este texto: {st.session_state.kb_text}\n\nPregunta: {prompt}",
+                    request_options=RequestOptions(api_version='v1')
+                )
                 st.markdown(response.text)
         
         st.session_state.messages.append({"role": "assistant", "content": response.text})
 
     except Exception as e:
-        st.error(f"Error técnico: {e}")
+        st.error(f"Error: {e}")
