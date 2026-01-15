@@ -1,16 +1,15 @@
 import streamlit as st
-import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
+# Configuración de la App
 st.set_page_config(page_title="Asistente Kaiowa", layout="centered")
 
-# Estilo visual limpio
+# Estilo visual solicitado
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+    #MainMenu, footer {visibility: hidden;}
     .st-emotion-cache-16idsys.e1nzilvr5 { background-color: #3f5fdf !important; color: white !important; }
     .st-emotion-cache-16idsys.e1nzilvr5 p { color: white !important; }
     h1 { color: #3f5fdf; }
@@ -20,41 +19,42 @@ st.markdown("""
 BASE_URL = "https://sites.google.com/kaiowa.co/informate-kaiowa/inicio"
 
 @st.cache_resource
-def get_kb_content():
+def leer_sitio():
     urls = {BASE_URL}
     try:
         r = requests.get(BASE_URL, timeout=10)
         if r.status_code == 200:
-            soup = BeautifulSoup(r.content, 'html.parser')
-            for a in soup.find_all('a', href=True):
-                full = urljoin(BASE_URL, a['href'])
-                if "sites.google.com" in full and "/informate-kaiowa/" in full:
-                    urls.add(full)
+            s = BeautifulSoup(r.content, 'html.parser')
+            for a in s.find_all('a', href=True):
+                f = urljoin(BASE_URL, a['href'])
+                if "sites.google.com" in f and "/informate-kaiowa/" in f: urls.add(f)
     except: pass
-    text = ""
+    texto = ""
     for link in list(urls):
         try:
             res = requests.get(link, timeout=10)
             if res.status_code == 200:
-                s = BeautifulSoup(res.content, 'html.parser')
-                text += f"\n--- PAGINA: {link} ---\n"
-                for tag in s.find_all(['p', 'h1', 'h2', 'li']):
-                    clean = tag.get_text().strip()
-                    if len(clean) > 20: text += clean + "\n"
+                soup = BeautifulSoup(res.content, 'html.parser')
+                texto += f"\n--- SECCION: {link} ---\n"
+                for tag in soup.find_all(['p', 'h1', 'h2', 'li']):
+                    c = tag.get_text().strip()
+                    if len(c) > 20: texto += c + "\n"
         except: pass
-    return text
+    return texto
 
 st.title("Asistente Kaiowa 💬")
 
+# Verificar API Key en Secrets
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("Configura GEMINI_API_KEY en Secrets.")
     st.stop()
 
 if "kb" not in st.session_state:
-    st.session_state.kb = get_kb_content()
+    with st.spinner("Cargando información del portal..."):
+        st.session_state.kb = leer_sitio()
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Conexión establecida. ¿Qué duda tienes?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "¡Hola! Estoy lista. ¿Qué duda tienes sobre los procesos?"}]
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]): st.markdown(m["content"])
@@ -64,25 +64,31 @@ if prompt := st.chat_input("Escribe tu duda aquí..."):
     with st.chat_message("user"): st.markdown(prompt)
 
     try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        # LLAMADA DIRECTA (SIN LIBRERÍAS DE GOOGLE)
+        api_key = st.secrets["GEMINI_API_KEY"]
+        # Usamos la versión estable 'v1' para asegurar compatibilidad
+        url_api = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
         
-        # EL CAMBIO TÉCNICO DEFINITIVO:
-        # Buscamos la ruta interna del modelo antes de usarlo para evitar el 404
-        model_info = genai.get_model('models/gemini-1.5-flash')
-        model = genai.GenerativeModel(model_name=model_info.name)
-        
-        instrucciones = f"Eres el asistente de Kaiowa. Tutea. Usa solo esto: {st.session_state.kb}"
+        headers = {'Content-Type': 'application/json'}
+        payload = {
+            "contents": [{
+                "parts": [{
+                    "text": f"Eres el asistente de Kaiowa. Tutea siempre. Usa solo esta información: {st.session_state.kb}\n\nPregunta: {prompt}"
+                }]
+            }]
+        }
         
         with st.chat_message("assistant"):
-            response = model.generate_content(instrucciones + "\n\nPregunta: " + prompt)
-            st.markdown(response.text)
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
+            with st.spinner("Consultando..."):
+                response = requests.post(url_api, json=payload, headers=headers, timeout=30)
+                data = response.json()
+                
+                if "candidates" in data:
+                    respuesta = data["candidates"][0]["content"]["parts"][0]["text"]
+                    st.markdown(respuesta)
+                    st.session_state.messages.append({"role": "assistant", "content": respuesta})
+                else:
+                    st.error(f"Error de Google: {data.get('error', {}).get('message', 'Desconocido')}")
 
     except Exception as e:
-        # Si falla el Flash, intentamos la ruta directa del Pro sin intermediarios
-        try:
-            model = genai.GenerativeModel('gemini-1.0-pro')
-            response = model.generate_content(prompt)
-            st.markdown(response.text)
-        except:
-            st.error(f"Error de acceso: {e}")
+        st.error(f"Error de conexión: {e}")
